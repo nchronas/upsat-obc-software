@@ -162,7 +162,6 @@ int main(void)
 
   SEGGER_SYSVIEW_Conf();
   sysview_init();
-
   /* USER CODE END 2 */
 
   /* USER CODE BEGIN RTOS_MUTEX */
@@ -191,11 +190,11 @@ int main(void)
   idleHandle = osThreadCreate(osThread(time_check), NULL);
 
   /* definition and creation of SU_SCH_task */
-  osThreadDef(SU_SCH_task, SU_SCH, osPriorityNormal, 0, 512);
+  osThreadDef(SU_SCH_task, SU_SCH, osPriorityBelowNormal, 0, 512);
   su_schHandle = osThreadCreate(osThread(SU_SCH_task), NULL);
 
   /* definition and creation of scheduling_serv */
-  osThreadDef(scheduling_serv, sche_se_sch, osPriorityBelowNormal, 0, 128);
+  osThreadDef(scheduling_serv, sche_se_sch, osPriorityNormal, 0, 128);
   sche_servHandle = osThreadCreate(osThread(scheduling_serv), NULL);
 
   /* USER CODE BEGIN RTOS_THREADS */
@@ -722,17 +721,16 @@ void UART_task(void const * argument)
    
    mass_storage_init();
 
+   su_INIT();
+
+   scheduling_service_init();
+   
   /*Task notification setup*/
   uint32_t ulNotificationValue;
   const TickType_t xMaxBlockTime = pdMS_TO_TICKS(10000);
 
   xTask_UART = xTaskGetCurrentTaskHandle();
 
-  su_INIT();
-
-  scheduling_service_init();
-   
-  
   //HAL_SPI_TransmitReceive_IT(&hspi3, obc_data.iac_out, obc_data.iac_in, 16);
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_SET);
   osDelay(1);
@@ -753,7 +751,7 @@ void UART_task(void const * argument)
     import_pkt(DBG_APP_ID, &obc_data.dbg_uart);
     import_pkt(COMMS_APP_ID, &obc_data.comms_uart);
     import_pkt(ADCS_APP_ID, &obc_data.adcs_uart);
-//    import_spi();
+    import_spi();
 
     export_pkt(EPS_APP_ID, &obc_data.eps_uart);
     export_pkt(ADCS_APP_ID, &obc_data.adcs_uart);
@@ -798,10 +796,16 @@ void IDLE_task(void const * argument)
     uint32_t time = HAL_sys_GetTick();
     task_times.idle_time = time;
 
-//    uart_killer(EPS_APP_ID, &obc_data.eps_uart, time);
-//    uart_killer(DBG_APP_ID, &obc_data.dbg_uart, time);
-//    uart_killer(COMMS_APP_ID, &obc_data.comms_uart, time);
-//    uart_killer(ADCS_APP_ID, &obc_data.adcs_uart, time);
+    uart_killer(EPS_APP_ID, &obc_data.eps_uart, time);
+    uart_killer(DBG_APP_ID, &obc_data.dbg_uart, time);
+    uart_killer(COMMS_APP_ID, &obc_data.comms_uart, time);
+    uart_killer(ADCS_APP_ID, &obc_data.adcs_uart, time);
+
+    pkt_pool_IDLE(time);
+    queue_IDLE(EPS_APP_ID);
+    queue_IDLE(DBG_APP_ID);
+    queue_IDLE(COMMS_APP_ID);
+    queue_IDLE(ADCS_APP_ID);
 
     if(time - obc_data.adc_time > 30000) {
       HAL_ADC_Start_IT(&hadc1);
@@ -813,8 +817,6 @@ void IDLE_task(void const * argument)
       HAL_ADC_Stop_IT(&hadc1);
       obc_data.adc_flag = false;
     }
-    
-    pkt_pool_IDLE();
     osDelay(1000);
     
   }
