@@ -95,8 +95,8 @@
 #define IAC_MISO_SPI3_GPIO_Port GPIOB
 #define IAC_MOSI_SPI3_Pin GPIO_PIN_5
 #define IAC_MOSI_SPI3_GPIO_Port GPIOB
-#define IAC_CS_SPI3_Pin GPIO_PIN_6
-#define IAC_CS_SPI3_GPIO_Port GPIOB
+#define IAC_CS_Pin GPIO_PIN_6
+#define IAC_CS_GPIO_Port GPIOB
 #define DBG_EN_Pin GPIO_PIN_7
 #define DBG_EN_GPIO_Port GPIOB
 #define IAC_CAMERA_PWR_Pin GPIO_PIN_8
