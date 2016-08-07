@@ -122,7 +122,8 @@ void sche_se_sch(void const * argument);
 /* USER CODE END PFP */
 
 /* USER CODE BEGIN 0 */
-
+const TickType_t xUARTMaxBlockTime = pdMS_TO_TICKS(10000);
+const TickType_t xUARTMinBlockTime = pdMS_TO_TICKS(100);
 /* USER CODE END 0 */
 
 int main(void)
@@ -154,7 +155,7 @@ int main(void)
   MX_SPI3_Init();
   MX_ADC1_Init();
   MX_RTC_Init();
-  //MX_IWDG_Init();
+  MX_IWDG_Init();
 
   /* USER CODE BEGIN 2 */
   //wdg_INIT();
@@ -190,11 +191,11 @@ int main(void)
   idleHandle = osThreadCreate(osThread(time_check), NULL);
 
   /* definition and creation of SU_SCH_task */
-  osThreadDef(SU_SCH_task, SU_SCH, osPriorityBelowNormal, 0, 512);
+  osThreadDef(SU_SCH_task, SU_SCH, osPriorityNormal, 0, 512);
   su_schHandle = osThreadCreate(osThread(SU_SCH_task), NULL);
 
   /* definition and creation of scheduling_serv */
-  osThreadDef(scheduling_serv, sche_se_sch, osPriorityNormal, 0, 128);
+  osThreadDef(scheduling_serv, sche_se_sch, osPriorityBelowNormal, 0, 128);
   sche_servHandle = osThreadCreate(osThread(scheduling_serv), NULL);
 
   /* USER CODE BEGIN RTOS_THREADS */
@@ -720,16 +721,15 @@ void UART_task(void const * argument)
    HAL_obc_SD_ON();
    
    mass_storage_init();
-
-   su_INIT();
-
-   scheduling_service_init();
    
   /*Task notification setup*/
   uint32_t ulNotificationValue;
-  const TickType_t xMaxBlockTime = pdMS_TO_TICKS(10000);
-
   xTask_UART = xTaskGetCurrentTaskHandle();
+  TickType_t blockTime;
+
+  su_INIT();
+
+  scheduling_service_init();
 
   //HAL_SPI_TransmitReceive_IT(&hspi3, obc_data.iac_out, obc_data.iac_in, 16);
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_6, GPIO_PIN_SET);
@@ -758,9 +758,19 @@ void UART_task(void const * argument)
     export_pkt(COMMS_APP_ID, &obc_data.comms_uart);
     export_pkt(DBG_APP_ID, &obc_data.dbg_uart);
 
-    wdg.uart_valid = true;
-    ulNotificationValue = ulTaskNotifyTake( pdTRUE, xMaxBlockTime);
-    
+    wdg_reset_UART();
+
+    if(uxQueueMessagesWaiting(queueADCS) > 0 ||
+       uxQueueMessagesWaiting(queueDBG) > 0 ||
+       uxQueueMessagesWaiting(queueCOMMS) > 0 ||
+       uxQueueMessagesWaiting(queueEPS) > 0) {
+
+      blockTime = xUARTMinBlockTime;
+    } else {
+      blockTime = xUARTMaxBlockTime;
+    }
+
+    ulNotificationValue = ulTaskNotifyTake( pdTRUE, blockTime);
   }
   /* USER CODE END 5 */ 
 }
@@ -793,19 +803,23 @@ void IDLE_task(void const * argument)
   /* Infinite loop */
   for(;;)
   {
+
+    wdg_IDLE();
+
     uint32_t time = HAL_sys_GetTick();
     task_times.idle_time = time;
 
-    uart_killer(EPS_APP_ID, &obc_data.eps_uart, time);
-    uart_killer(DBG_APP_ID, &obc_data.dbg_uart, time);
-    uart_killer(COMMS_APP_ID, &obc_data.comms_uart, time);
-    uart_killer(ADCS_APP_ID, &obc_data.adcs_uart, time);
+    //uart_killer(EPS_APP_ID, &obc_data.eps_uart, time);
+    //uart_killer(DBG_APP_ID, &obc_data.dbg_uart, time);
+    //uart_killer(COMMS_APP_ID, &obc_data.comms_uart, time);
+    //uart_killer(ADCS_APP_ID, &obc_data.adcs_uart, time);
 
     pkt_pool_IDLE(time);
     queue_IDLE(EPS_APP_ID);
     queue_IDLE(DBG_APP_ID);
     queue_IDLE(COMMS_APP_ID);
     queue_IDLE(ADCS_APP_ID);
+    check_subsystems_timeouts(time);
 
     if(time - obc_data.adc_time > 30000) {
       HAL_ADC_Start_IT(&hadc1);
@@ -827,20 +841,16 @@ void IDLE_task(void const * argument)
 void SU_SCH(void const * argument)
 {
   /* USER CODE BEGIN su_sch_task */
-  uint32_t sleep_val_secs=55;
+  uint32_t sleep_val_secs;
   su_mnlp_returnState su_sche_state = su_sche_last;
-  osDelay(5000);
-  /* Infinite loop */
-  for (;;){
-    if( *MNLP_data.su_service_sheduler_active){
-          
-//        tc_tm_pkt *su_temp = get_pkt(PKT_NORMAL);
-//        hk_crt_pkt_TC( su_temp, ADCS_APP_ID, SU_SCI_HDR_REP);
-//        route_pkt(su_temp);
+  osDelay(5000); /*delay to hold freeRTOS scheduler executing us before mass_storage init, su_init etc...*/
+  
+  for (;;){ /* Infinite loop */
+    if( *MNLP_data.su_service_scheduler_active){
         
         sleep_val_secs = 0;
         su_sche_state = su_script_selector(&sleep_val_secs);
-//        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS((sleep_val_secs)*1000));
+
         if( su_sche_state == su_no_scr_eligible){
             ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS((sleep_val_secs)*1000)); /*sleeps for <50 secs*/
             continue;
@@ -849,7 +859,6 @@ void SU_SCH(void const * argument)
         if( su_sche_state == su_new_scr_selected){ /*script marked active 1 to 60 seconds earlier, sleep this time*/
             ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS((sleep_val_secs)*1000));
             continue;
-            //run the su_SCH?
         }
         else
         if( su_sche_state == su_no_new_scr_selected){ /*so there is an already active script, old or new, go for it*/
@@ -857,18 +866,17 @@ void SU_SCH(void const * argument)
                 sleep_val_secs = 0;
                 su_sche_state = su_SCH(&sleep_val_secs);                
                 if( su_sche_state == su_sche_script_ended){
-                    /*all time tables inside su_SCH has been served. Select a new script or Go for the next science collection day*/
-                   //TODO: disable the scheduler ?
+                    /*all time tables inside su_SCH has been served. Select a new script or go for the next science collection day*/
                    ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS((sleep_val_secs)*1000));
                    continue;
-                   /*TODO: also to be notified on script upload*/
+                   /*TODO: also to be notified on script upload?*/
                 }
             }
         }
       }
     osDelay(2000);
   }  
-  /* USER CODE END su_sch_task */
+/* USER CODE END su_sch_task */
 }
 
 /* sche_se_sch function */
