@@ -43,6 +43,7 @@
 #include "su_mnlp.h"
 #include "scheduling_service.h"
 
+#include "stm32f4xx_hal_spi.h"
 
 #undef __FILE_ID__
 #define __FILE_ID__ 666
@@ -645,7 +646,7 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pin = COMMS_EN_Pin|ADC_CS_SPI1_Pin|IAC_EN_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_HIGH;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
   /*Configure GPIO pins : PB1 FLASH_HOLD_Pin DBG_EN_Pin IAC_CAMERA_PWR_Pin */
@@ -664,7 +665,7 @@ static void MX_GPIO_Init(void)
 
   /*Configure GPIO pin : IAC_CS_Pin */
   GPIO_InitStruct.Pin = IAC_CS_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_IT_FALLING;
+  GPIO_InitStruct.Mode = GPIO_MODE_IT_RISING_FALLING;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(IAC_CS_GPIO_Port, &GPIO_InitStruct);
 
@@ -676,31 +677,68 @@ static void MX_GPIO_Init(void)
 
 /* USER CODE BEGIN 4 */
 
+uint8_t gtp_tx[160];
+uint8_t gtp_rx[160];
+uint8_t iac_start_flag = false;
+uint8_t iac_ok_flag = false;
+uint8_t iac_notify = false;
+volatile uint8_t iac_error_flag = false;
+uint8_t iac_write_flag = false;
+
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) {
+  if(GPIO_Pin == IAC_CS_Pin) {
+
+    if(iac_notify == true) {
+
+      if(HAL_GPIO_ReadPin(GPIOB, IAC_CS_Pin) == GPIO_PIN_SET) {
+        hspi3.Instance->CR1 |= SPI_CR1_SSI;    // SET
+        iac_start_flag = true;
+      } else {
+        hspi3.Instance->CR1 &= !(SPI_CR1_SSI); // RESET
+        
+      }
+
+      
+      BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+      vTaskNotifyGiveFromISR(xTask_UART, &xHigherPriorityTaskWoken);
+    }
+  }
+}
+
 void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi) {
   
-  //if(hspi == &hspi3) {
-    obc_data.iac_flag = true; 
+  if(hspi == &hspi3) {
+    //obc_data.iac_flag = true; 
   
-    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    vTaskNotifyGiveFromISR(xTask_UART, &xHigherPriorityTaskWoken);
-  //}
+
+    //BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    //vTaskNotifyGiveFromISR(xTask_UART, &xHigherPriorityTaskWoken);
+  }
+}
+
+void HAL_SPI_RxCpltCallback(SPI_HandleTypeDef *hspi) {
+  
+  if(hspi == &hspi3) {
+    //obc_data.iac_flag = true;
+
+    //BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    //vTaskNotifyGiveFromISR(xTask_UART, &xHigherPriorityTaskWoken);
+  }
 }
 
 void HAL_SPI_ErrorCallback (SPI_HandleTypeDef * hspi) {
 
-  //if(hspi == &hspi3) {
-
-    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-    vTaskNotifyGiveFromISR(xTask_UART, &xHigherPriorityTaskWoken);
-  //}
+  if(hspi == &hspi3) {
+    //iac_error_flag = true;
+    //BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    //vTaskNotifyGiveFromISR(xTask_UART, &xHigherPriorityTaskWoken);
+  }
 
 }
 
 void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc) {
     obc_data.adc_flag = true;
 }
-
-
 /* USER CODE END 4 */
 
 /* UART_task function */
@@ -731,7 +769,7 @@ void UART_task(void const * argument)
 
    update_boot_counter();
 
-   HAL_obc_IAC_ON();
+   //HAL_obc_IAC_ON();
    
    HAL_obc_SD_ON();
    
@@ -742,6 +780,7 @@ void UART_task(void const * argument)
   xTask_UART = xTaskGetCurrentTaskHandle();
   TickType_t blockTime;
 
+  iac_notify = true;
   su_INIT();
 
   scheduling_service_init();
@@ -757,16 +796,61 @@ void UART_task(void const * argument)
   HAL_UART_Receive_IT( &huart4, obc_data.comms_uart.uart_buf, UART_BUF_SIZE);
   HAL_UART_Receive_IT( &huart6, obc_data.adcs_uart.uart_buf, UART_BUF_SIZE);
 
+  //hspi3.Instance->CR1 |= SPI_CR1_SSI;    // SET
   /* Infinite loop */
   for(;;)
   {
     task_times.uart_time = HAL_sys_GetTick();
+
+    // if(iac_start_flag == true) {
+    //   HAL_StatusTypeDef res = 0;
+    //   //HAL_SPI_DMAStop(&hspi3);
+    //   hspi3.State = HAL_SPI_STATE_READY;
+    //   if(obc_data.iac_flag == true) {
+
+    //     //tx_iac_temp[0] = 0xDE;
+    //     //res = HAL_SPI_TransmitReceive_IT(&hspi3, tx_iac_temp, rx_iac_temp, 159);
+    //   } else {
+    //     if(iac_error_flag == true) {
+    //       gtp_tx[0] = 0xAD;
+    //     } else if(iac_write_flag == true) {
+    //       gtp_tx[0] = 0x55;
+    //       iac_write_flag = false;
+    //     } else {
+    //       gtp_tx[0] = 0xBE;
+    //     }
+    //     res = HAL_SPI_TransmitReceive_IT(&hspi3, gtp_tx, gtp_rx, 159);
+    //     iac_error_flag = false;
+    //   }
+    //   iac_start_flag = false;
+    //  SYSVIEW_PRINT("IAC START");
+    // }
+
+    // if(obc_data.iac_flag == true) {
+    //   uint8_t res_crc = 0;
+    //   uint16_t size = 158;
+    //   checkSum(&gtp_rx[1], 158, &res_crc);
+    //   if(res_crc != gtp_rx[158]) {
+    //     //iac_error_flag = true;
+    //   }
+
+    //   gtp_rx[0]; /*tile number*/
+    //   uint16_t blk_num = gtp_rx[1] << 8; /*MSB block number*/
+    //   blk_num |= gtp_rx[2]; /*LSB block number*/
+    //   if((mass_storage_storeFile(FOTOS, blk_num, &gtp_rx[1], &size)) != SATR_OK) {
+    //     iac_error_flag = true;
+    //   }
+    //   obc_data.iac_flag = false;
+    //   iac_write_flag = true;
+    //   SYSVIEW_PRINT("IAC file OK");
+    // }
+
     su_incoming_rx();
     import_pkt(EPS_APP_ID, &obc_data.eps_uart);
     import_pkt(DBG_APP_ID, &obc_data.dbg_uart);
     import_pkt(COMMS_APP_ID, &obc_data.comms_uart);
     import_pkt(ADCS_APP_ID, &obc_data.adcs_uart);
-    import_spi();
+    //import_spi();
 
     export_pkt(EPS_APP_ID, &obc_data.eps_uart);
     export_pkt(ADCS_APP_ID, &obc_data.adcs_uart);
